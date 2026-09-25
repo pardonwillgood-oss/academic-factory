@@ -78,7 +78,7 @@ export default function Page() {
         <nav className="marketing-links" aria-label="Main navigation">
           <a href="#product">Product</a><a href="#how-it-works">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a>
         </nav>
-        <div className="nav-actions"><a className="login-link" href="#workspace">Log in</a><a className="button button-dark button-small" href="#workspace">Get started <ArrowUpRight size={15} /></a></div>
+        <div className="nav-actions"><a className="login-link" href="/login">Log in</a><a className="button button-dark button-small" href="/login">Get started <ArrowUpRight size={15} /></a></div>
         <button className="icon-button mobile-menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">{menuOpen ? <X /> : <Menu />}</button>
         {menuOpen && <div className="mobile-menu"><a href="#product">Product</a><a href="#how-it-works">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a><a href="#workspace">Get started</a></div>}
       </header>
