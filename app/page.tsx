@@ -19,6 +19,7 @@ import {
   MoreHorizontal,
   Play,
   Plus,
+  Settings,
   Sparkles,
   Target,
   Trophy,
@@ -55,12 +56,24 @@ export default function Page() {
   const [openFaq, setOpenFaq] = useState<number | null>(0)
   const [notice, setNotice] = useState('')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark'>('light')
+  const [displayName, setDisplayName] = useState('')
   const router = useRouter()
   const { data: session } = authClient.useSession()
 
   const showNotice = (message: string) => {
     setNotice(message)
     window.setTimeout(() => setNotice(''), 2600)
+  }
+
+  const handleSaveProfile = async () => {
+    if (!displayName.trim()) return showNotice('Enter a display name first.')
+    const result = await authClient.updateUser({ name: displayName.trim() })
+    if (result.error) return showNotice('We could not update your profile.')
+    setSettingsOpen(false)
+    router.refresh()
+    showNotice('Profile updated.')
   }
 
   const handleLogout = async () => {
@@ -88,7 +101,7 @@ export default function Page() {
   }
 
   return (
-    <main className="site-shell">
+    <main className={`site-shell ${theme === 'dark' ? 'theme-dark' : ''}`}>
       <header className="marketing-nav">
         <a className="brand" href="#top" aria-label="Academic Factory home">
           <span className="brand-mark"><Sparkles size={16} /></span>
@@ -97,7 +110,7 @@ export default function Page() {
         <nav className="marketing-links" aria-label="Main navigation">
           <a href="#product">Product</a><a href="#how-it-works">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a>
         </nav>
-        <div className="nav-actions">{session?.user ? <><span className="nav-user">{session.user.name}</span><button className="login-link nav-button" onClick={handleLogout}>Log out</button><button className="button button-dark button-small" onClick={handleDeleteAccount}>Delete account</button></> : <><a className="login-link" href="/login">Log in</a><a className="button button-dark button-small" href="/login">Get started <ArrowUpRight size={15} /></a></>}</div>
+        <div className="nav-actions">{session?.user ? <><span className="nav-user">{session.user.name}</span><button className="settings-trigger" onClick={() => { setDisplayName(session.user.name ?? ''); setSettingsOpen(true) }} aria-label="Open settings"><Settings size={17} /></button></> : <><a className="login-link" href="/login">Log in</a><a className="button button-dark button-small" href="/login">Get started <ArrowUpRight size={15} /></a></>}</div>
         <button className="icon-button mobile-menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">{menuOpen ? <X /> : <Menu />}</button>
         {menuOpen && <div className="mobile-menu"><a href="#product">Product</a><a href="#how-it-works">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a><a href="#workspace">Get started</a></div>}
       </header>
@@ -136,6 +149,7 @@ export default function Page() {
       <section className="final-cta"><div className="final-orb" /><div className="eyebrow light"><span className="eyebrow-dot" /> Your next chapter starts here</div><h2>Make studying feel<br /><em>less scattered.</em></h2><p>Upload once. Understand more. Show up ready.</p><a className="button button-light" href="#workspace">Build my academic workspace <ArrowUpRight size={17} /></a></section>
       <footer className="footer"><div className="footer-top"><a className="brand" href="#top"><span className="brand-mark"><Sparkles size={16} /></span><span>Academic <span>Factory</span></span></a><span className="footer-note">The academic operating system for curious students.</span><div className="footer-links"><a href="#product">Product</a><a href="#pricing">Pricing</a><a href="#faq">Help</a><a href="mailto:hello@academicfactory.app">Contact</a></div></div><div className="footer-bottom"><span>© 2024 Academic Factory. Built for the next chapter.</span><span><a href="#faq">Privacy</a><a href="#faq">Terms</a></span></div></footer>
 
+      {settingsOpen && session?.user && <div className="modal-backdrop" role="presentation" onClick={() => setSettingsOpen(false)}><div className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings"><X size={18} /></button><div className="settings-heading"><Settings size={20} /><span>Account settings</span></div><h3 id="settings-title">Make it yours.</h3><p>Manage your profile, appearance and account access.</p><section className="settings-section"><label className="settings-label" htmlFor="display-name">Display name</label><input id="display-name" className="settings-input" value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={60} /><button className="button button-dark full-width" onClick={handleSaveProfile}>Save changes</button></section><section className="settings-section"><span className="settings-label">Theme</span><div className="theme-options"><button className={theme === 'light' ? 'selected' : ''} onClick={() => setTheme('light')}>Light</button><button className={theme === 'dark' ? 'selected' : ''} onClick={() => setTheme('dark')}>Dark</button></div></section><section className="settings-section settings-danger"><button className="settings-action" onClick={handleLogout}>Log out</button><button className="settings-action danger" onClick={handleDeleteAccount}>Delete account</button></section></div></div>}
       {showUpload && <div className="modal-backdrop" role="presentation" onClick={() => setShowUpload(false)}><div className="upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setShowUpload(false)} aria-label="Close upload dialog"><X size={18} /></button><div className="upload-icon"><Upload size={23} /></div><h3 id="upload-title">Add your first material</h3><p>Drop a syllabus, chapter, notes or PDF here and we&apos;ll start building your workspace.</p><label className="drop-zone"><input type="file" accept=".pdf,.doc,.docx,.txt" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /><FileText size={23} /><b>{selectedFile ? selectedFile.name : 'Choose a file to upload'}</b><span>PDF, DOCX or TXT · up to 20MB</span></label><button className="button button-dark full-width" onClick={handleUpload}>Continue <ArrowUpRight size={16} /></button></div></div>}
       {notice && <div className="toast" role="status">{notice}</div>}
     </main>
