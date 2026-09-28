@@ -17,9 +17,10 @@ const planSchema = z.object({
 })
 
 export async function POST(request: Request) {
+  let material = ''
   try {
     const body = await request.json()
-    const material = typeof body.material === 'string' ? body.material.trim() : ''
+    material = typeof body.material === 'string' ? body.material.trim() : ''
     if (material.length < 20) return Response.json({ error: 'Add at least a few sentences of study material.' }, { status: 400 })
 
     const { object } = await generateObject({
