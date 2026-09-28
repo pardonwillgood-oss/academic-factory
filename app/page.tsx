@@ -105,9 +105,15 @@ export default function Page() {
     }
     setIsGenerating(true)
     try {
-      const response = await fetch('/api/study-plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ material }) })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error)
+      const response = await fetch('/api/study-plan', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ material }) })
+      const responseText = await response.text()
+      let result: { error?: string; title?: string; summary?: string; estimatedHours?: number; concepts?: Array<{ title: string; whyItMatters: string; learn: string[]; practice: string[]; revise: string[]; create: string[]; prepare: string[] }> }
+      try {
+        result = JSON.parse(responseText)
+      } catch {
+        throw new Error('The study planner returned an unexpected response. Please try again.')
+      }
+      if (!response.ok) throw new Error(result.error ?? 'We could not build your study path.')
       setStudyPlan(result)
       setShowUpload(false)
       setMaterialText('')
