@@ -1,4 +1,5 @@
 import { generateObject, gateway } from 'ai'
+import { PDFParse } from 'pdf-parse'
 import { z } from 'zod'
 
 const planSchema = z.object({
@@ -21,7 +22,14 @@ export async function POST(request: Request) {
   try {
     const body = await request.json()
     material = typeof body.material === 'string' ? body.material.trim() : ''
-    if (material.length < 20) return Response.json({ error: 'Add at least a few sentences of study material.' }, { status: 400 })
+    if (!material && typeof body.fileData === 'string' && body.fileData.startsWith('data:application/pdf;base64,')) {
+      const base64 = body.fileData.slice('data:application/pdf;base64,'.length)
+      const parser = new PDFParse({ data: Buffer.from(base64, 'base64') })
+      const parsed = await parser.getText()
+      material = parsed.text.replace(/\s+/g, ' ').trim()
+      await parser.destroy()
+    }
+    if (material.length < 20) return Response.json({ error: 'We could not read enough text from this file. Try a text-based PDF or paste the chapter text.' }, { status: 400 })
 
     const { object } = await generateObject({
       model: gateway('google/gemini-3.1-flash-lite'),

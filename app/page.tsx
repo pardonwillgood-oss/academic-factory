@@ -96,16 +96,24 @@ export default function Page() {
 
   const handleUpload = async () => {
     let material = materialText.trim()
+    let fileData: string | undefined
+    let fileName: string | undefined
     if (!material && selectedFile) {
-      material = await selectedFile.text()
+      fileName = selectedFile.name
+      if (selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf')) {
+        const encoded = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = () => reject(reader.error); reader.readAsDataURL(selectedFile) })
+        fileData = encoded
+      } else {
+        material = await selectedFile.text()
+      }
     }
-    if (material.length < 20) {
+    if (!material && !fileData) {
       showNotice('Paste at least a few sentences or choose a text-based file.')
       return
     }
     setIsGenerating(true)
     try {
-      const response = await fetch('/api/study-plan', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ material }) })
+      const response = await fetch('/api/study-plan', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ material, fileData, fileName }) })
       const responseText = await response.text()
       let result: { error?: string; title?: string; summary?: string; estimatedHours?: number; concepts?: Array<{ title: string; whyItMatters: string; learn: string[]; practice: string[]; revise: string[]; create: string[]; prepare: string[] }> }
       try {
@@ -176,7 +184,7 @@ export default function Page() {
       <footer className="footer"><div className="footer-top"><a className="brand" href="#top"><span className="brand-mark"><Sparkles size={16} /></span><span>Academic <span>Factory</span></span></a><span className="footer-note">The academic operating system for curious students.</span><div className="footer-links"><a href="#product">Product</a><a href="#pricing">Pricing</a><a href="#faq">Help</a><a href="mailto:hello@academicfactory.app">Contact</a></div></div><div className="footer-bottom"><span>© 2024 Academic Factory. Built for the next chapter.</span><span><a href="#faq">Privacy</a><a href="#faq">Terms</a></span></div></footer>
 
       {settingsOpen && session?.user && <div className="modal-backdrop" role="presentation" onClick={() => setSettingsOpen(false)}><div className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings"><X size={18} /></button><div className="settings-heading"><Settings size={20} /><span>Account settings</span></div><h3 id="settings-title">Make it yours.</h3><p>Manage your profile, appearance and account access.</p><section className="settings-section"><label className="settings-label" htmlFor="display-name">Display name</label><input id="display-name" className="settings-input" value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={60} /><button className="button button-dark full-width" onClick={handleSaveProfile}>Save changes</button></section><section className="settings-section"><span className="settings-label">Theme</span><div className="theme-options"><button className={theme === 'light' ? 'selected' : ''} onClick={() => setTheme('light')}>Light</button><button className={theme === 'dark' ? 'selected' : ''} onClick={() => setTheme('dark')}>Dark</button></div></section><section className="settings-section settings-danger"><button className="settings-action" onClick={handleLogout}>Log out</button><button className="settings-action danger" onClick={handleDeleteAccount}>Delete account</button></section></div></div>}
-      {showUpload && <div className="modal-backdrop" role="presentation" onClick={() => setShowUpload(false)}><div className="upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setShowUpload(false)} aria-label="Close upload dialog"><X size={18} /></button><div className="upload-icon"><Upload size={23} /></div><h3 id="upload-title">Add your first material</h3><p>Paste notes, a syllabus, or chapter text and we&apos;ll turn it into a complete learning loop.</p><textarea className="material-input" value={materialText} onChange={(event) => setMaterialText(event.target.value)} placeholder="Example: Photosynthesis converts light energy into chemical energy..." rows={7} /><label className="drop-zone"><input type="file" accept=".txt,.md,.csv" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /><FileText size={23} /><b>{selectedFile ? selectedFile.name : 'Or choose a text file'}</b><span>TXT, MD or CSV</span></label><button className="button button-dark full-width" onClick={handleUpload} disabled={isGenerating}>{isGenerating ? 'Building your path...' : 'Build my study path'} <ArrowUpRight size={16} /></button></div></div>}
+      {showUpload && <div className="modal-backdrop" role="presentation" onClick={() => setShowUpload(false)}><div className="upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setShowUpload(false)} aria-label="Close upload dialog"><X size={18} /></button><div className="upload-icon"><Upload size={23} /></div><h3 id="upload-title">Add your first material</h3><p>Paste notes, a syllabus, or chapter text and we&apos;ll turn it into a complete learning loop.</p><textarea className="material-input" value={materialText} onChange={(event) => setMaterialText(event.target.value)} placeholder="Example: Photosynthesis converts light energy into chemical energy..." rows={7} /><label className="drop-zone"><input type="file" accept=".pdf,.txt,.md,.csv" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /><FileText size={23} /><b>{selectedFile ? selectedFile.name : 'Or choose a text file'}</b><span>PDF, TXT, MD or CSV</span></label><button className="button button-dark full-width" onClick={handleUpload} disabled={isGenerating}>{isGenerating ? 'Building your path...' : 'Build my study path'} <ArrowUpRight size={16} /></button></div></div>}
       {notice && <div className="toast" role="status">{notice}</div>}
     </main>
   )
