@@ -42,6 +42,7 @@ export async function POST(request: Request) {
       await parser.destroy()
     }
     if (material.length < 20) return Response.json({ error: 'We could not read enough text from this file. Try a text-based PDF or paste the chapter text.' }, { status: 400 })
+    if (material.length > 30000) material = material.slice(0, 30000)
 
     const { object } = await generateObject({
       model: gateway('google/gemini-3.1-flash-lite'),
