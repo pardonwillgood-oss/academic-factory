@@ -1,5 +1,10 @@
 import { generateObject, gateway } from 'ai'
 import { PDFParse } from 'pdf-parse'
+import { headers } from 'next/headers'
+import { auth } from '@/lib/auth'
+import { db } from '@/lib/db'
+import { studyPlan } from '@/lib/db/schema'
+import { desc, eq } from 'drizzle-orm'
 import { z } from 'zod'
 
 const planSchema = z.object({
@@ -16,6 +21,13 @@ const planSchema = z.object({
     prepare: z.array(z.string()).min(1).max(3),
   })).min(1).max(12),
 })
+
+export async function GET() {
+  const session = await auth.api.getSession({ headers: await headers() })
+  if (!session?.user) return Response.json({ plans: [] })
+  const plans = await db.select().from(studyPlan).where(eq(studyPlan.userId, session.user.id)).orderBy(desc(studyPlan.createdAt))
+  return Response.json({ plans })
+}
 
 export async function POST(request: Request) {
   let material = ''
@@ -38,12 +50,28 @@ export async function POST(request: Request) {
       prompt: `Create a personalized study path from this material. Cover learning, practice, revision, creating something, and exam preparation for every concept. Material:\n\n${material.slice(0, 30000)}`,
     })
 
+    await savePlanForSignedInUser(object, body.fileName)
     return Response.json(object)
   } catch (error) {
     console.error('[v0] Study plan generation failed', error)
     const fallback = buildFallbackPlan(material)
+    await savePlanForSignedInUser(fallback)
     return Response.json({ ...fallback, generatedWith: 'Academic Factory planner' })
   }
+}
+
+async function savePlanForSignedInUser(plan: z.infer<typeof planSchema>, materialName?: string) {
+  const session = await auth.api.getSession({ headers: await headers() })
+  if (!session?.user) return
+  await db.insert(studyPlan).values({
+    id: crypto.randomUUID(),
+    userId: session.user.id,
+    title: plan.title,
+    summary: plan.summary,
+    estimatedHours: plan.estimatedHours,
+    materialName: materialName ?? null,
+    plan: plan.concepts,
+  })
 }
 
 function buildFallbackPlan(material: string) {

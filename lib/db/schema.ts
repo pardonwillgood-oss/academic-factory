@@ -1,4 +1,4 @@
-import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
+import { boolean, jsonb, pgTable, real, text, timestamp } from 'drizzle-orm/pg-core'
 
 export const user = pgTable('user', {
   id: text('id').primaryKey(),
@@ -36,6 +36,17 @@ export const account = pgTable('account', {
   password: text('password'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+})
+
+export const studyPlan = pgTable('study_plan', {
+  id: text('id').primaryKey(),
+  userId: text('userId').notNull(),
+  title: text('title').notNull(),
+  summary: text('summary').notNull(),
+  estimatedHours: real('estimatedHours').notNull(),
+  materialName: text('materialName'),
+  plan: jsonb('plan').notNull(),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
 })
 
 export const verification = pgTable('verification', {

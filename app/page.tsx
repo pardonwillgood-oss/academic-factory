@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import useSWR from 'swr'
 import { useRouter } from 'next/navigation'
 import { authClient } from '@/lib/auth-client'
 import {
@@ -42,6 +43,8 @@ const subjects = [
   { name: 'Chemistry', code: 'CHEM', progress: 52, tone: 'peach', next: 'Organic reactions' },
 ]
 
+const fetcher = (url: string) => fetch(url).then((response) => response.json())
+
 const plan = [
   { title: 'Revise integration', subject: 'Mathematics', duration: '25 min', done: true, color: 'lavender' },
   { title: 'Practice: Electrostatics', subject: 'Physics', duration: '20 min', done: false, color: 'mint' },
@@ -64,6 +67,12 @@ export default function Page() {
   const [displayName, setDisplayName] = useState('')
   const router = useRouter()
   const { data: session } = authClient.useSession()
+  const { data: savedPlans } = useSWR(session?.user ? '/api/study-plan' : null, fetcher)
+
+  useEffect(() => {
+    const latest = savedPlans?.plans?.[0]
+    if (latest) setStudyPlan({ title: latest.title, summary: latest.summary, estimatedHours: latest.estimatedHours, concepts: latest.plan })
+  }, [savedPlans])
 
   const showNotice = (message: string) => {
     setNotice(message)
