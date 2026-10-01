@@ -1,4 +1,3 @@
-import { generateObject, gateway } from 'ai'
 import { PDFParse } from 'pdf-parse'
 import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
@@ -32,7 +31,7 @@ export async function GET() {
 export async function POST(request: Request) {
   let material = ''
   try {
-    const body = await request.json()
+    const body = await request.json().catch(() => ({}))
     material = typeof body.material === 'string' ? body.material.trim() : ''
     if (!material && typeof body.fileData === 'string' && body.fileData.startsWith('data:application/pdf;base64,')) {
       const base64 = body.fileData.slice('data:application/pdf;base64,'.length)
@@ -44,15 +43,9 @@ export async function POST(request: Request) {
     if (material.length < 20) return Response.json({ error: 'We could not read enough text from this file. Try a text-based PDF or paste the chapter text.' }, { status: 400 })
     if (material.length > 30000) material = material.slice(0, 30000)
 
-    const { object } = await generateObject({
-      model: gateway('google/gemini-3.1-flash-lite'),
-      schema: planSchema,
-      system: 'You are an expert academic coach. Build a practical, encouraging study path from the student material. Keep tasks concrete and student-friendly. Return only the requested structured output.',
-      prompt: `Create a personalized study path from this material. Cover learning, practice, revision, creating something, and exam preparation for every concept. Material:\n\n${material.slice(0, 30000)}`,
-    })
-
-    await savePlanForSignedInUser(object, body.fileName)
-    return Response.json(object)
+    const plan = buildFallbackPlan(material)
+    void savePlanForSignedInUser(plan, body.fileName)
+    return Response.json({ ...plan, generatedWith: 'Academic Factory planner' }, { status: 200 })
   } catch (error) {
     console.error('[v0] Study plan generation failed', error)
     return createFallbackResponse(material)
