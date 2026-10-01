@@ -108,6 +108,10 @@ export default function Page() {
     let fileData: string | undefined
     let fileName: string | undefined
     if (!material && selectedFile) {
+      if (selectedFile.size > 3_000_000) {
+        showNotice('This file is too large for the planner. Please paste the chapter text or use a PDF under 3 MB.')
+        return
+      }
       fileName = selectedFile.name
       if (selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf')) {
         const encoded = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = () => reject(reader.error); reader.readAsDataURL(selectedFile) })
@@ -128,7 +132,10 @@ export default function Page() {
       try {
         result = JSON.parse(responseText)
       } catch {
-        throw new Error('The study planner returned an unexpected response. Please try again.')
+        if (response.status === 413 || responseText.includes('Request Entity')) {
+          throw new Error('This upload is too large. Please paste the chapter text or use a PDF under 3 MB.')
+        }
+        throw new Error(`The study planner could not process this request (${response.status}). Please try again.`)
       }
       if (!response.ok) throw new Error(result.error ?? 'We could not build your study path.')
       setStudyPlan(result)
