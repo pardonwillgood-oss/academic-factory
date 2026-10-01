@@ -55,9 +55,18 @@ export async function POST(request: Request) {
     return Response.json(object)
   } catch (error) {
     console.error('[v0] Study plan generation failed', error)
+    return createFallbackResponse(material)
+  }
+}
+
+function createFallbackResponse(material: string) {
+  try {
     const fallback = buildFallbackPlan(material)
-    await savePlanForSignedInUser(fallback, undefined)
-    return Response.json({ ...fallback, generatedWith: 'Academic Factory planner' })
+    void savePlanForSignedInUser(fallback, undefined)
+    return Response.json({ ...fallback, generatedWith: 'Academic Factory planner' }, { status: 200 })
+  } catch (fallbackError) {
+    console.error('[v0] Fallback study plan failed', fallbackError)
+    return Response.json({ error: 'Please paste at least a few sentences of study material and try again.' }, { status: 400 })
   }
 }
 
