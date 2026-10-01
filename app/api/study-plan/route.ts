@@ -55,23 +55,27 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('[v0] Study plan generation failed', error)
     const fallback = buildFallbackPlan(material)
-    await savePlanForSignedInUser(fallback)
+    await savePlanForSignedInUser(fallback, undefined)
     return Response.json({ ...fallback, generatedWith: 'Academic Factory planner' })
   }
 }
 
 async function savePlanForSignedInUser(plan: z.infer<typeof planSchema>, materialName?: string) {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) return
-  await db.insert(studyPlan).values({
-    id: crypto.randomUUID(),
-    userId: session.user.id,
-    title: plan.title,
-    summary: plan.summary,
-    estimatedHours: plan.estimatedHours,
-    materialName: materialName ?? null,
-    plan: plan.concepts,
-  })
+  try {
+    const session = await auth.api.getSession({ headers: await headers() })
+    if (!session?.user) return
+    await db.insert(studyPlan).values({
+      id: crypto.randomUUID(),
+      userId: session.user.id,
+      title: plan.title,
+      summary: plan.summary,
+      estimatedHours: plan.estimatedHours,
+      materialName: materialName ?? null,
+      plan: plan.concepts,
+    })
+  } catch (error) {
+    console.error('[v0] Could not save study plan; returning generated plan anyway', error)
+  }
 }
 
 function buildFallbackPlan(material: string) {
