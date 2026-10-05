@@ -153,9 +153,16 @@ export default function Page() {
         throw new Error('Invalid study plan format received.')
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'We could not build your study path.'
+      let errorMsg = 'We could not build your study path.'
+      if (error instanceof Error) {
+        errorMsg = error.message
+      } else if (typeof error === 'string') {
+        errorMsg = error
+      } else if (error && typeof error === 'object' && 'message' in error) {
+        errorMsg = String((error as Record<string, unknown>).message)
+      }
+      console.error('[v0] Study plan error:', error)
       showNotice(errorMsg)
-      console.error('[v0] Study plan error:', errorMsg)
     } finally {
       setIsGenerating(false)
     }
