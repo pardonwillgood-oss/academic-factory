@@ -118,7 +118,7 @@ export default function Page() {
         material = await selectedFile.text()
       }
     }
-    if (!material && !fileData) {
+    if (!material && !selectedFile) {
       showNotice('Paste at least a few sentences or choose a text-based file.')
       return
     }
@@ -140,16 +140,22 @@ export default function Page() {
         throw new Error(`The study planner could not process this request (${response.status}). Please try again.`)
       }
       if (!response.ok) {
-        const message = typeof result.error === 'string' ? result.error : 'We could not build your study path.'
+        const message = typeof result?.error === 'string' ? result.error : 'We could not build your study path.'
         throw new Error(message)
       }
-      setStudyPlan(result)
-      setShowUpload(false)
-      setMaterialText('')
-      setSelectedFile(null)
-      showNotice('Your personalized study path is ready.')
+      if (result?.title && result?.concepts) {
+        setStudyPlan(result as typeof studyPlan)
+        setShowUpload(false)
+        setMaterialText('')
+        setSelectedFile(null)
+        showNotice('Your personalized study path is ready.')
+      } else {
+        throw new Error('Invalid study plan format received.')
+      }
     } catch (error) {
-      showNotice(error instanceof Error ? error.message : 'We could not build your study path.')
+      const errorMsg = error instanceof Error ? error.message : 'We could not build your study path.'
+      showNotice(errorMsg)
+      console.error('[v0] Study plan error:', errorMsg)
     } finally {
       setIsGenerating(false)
     }
