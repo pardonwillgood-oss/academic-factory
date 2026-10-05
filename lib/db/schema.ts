@@ -49,6 +49,19 @@ export const studyPlan = pgTable('study_plan', {
   createdAt: timestamp('createdAt').notNull().defaultNow(),
 })
 
+export const smartSchedules = pgTable('smart_schedules', {
+  id: text('id').primaryKey(), userId: text('userId').notNull(), planId: text('planId'), taskId: text('taskId'),
+  startsAt: timestamp('startsAt').notNull(), endsAt: timestamp('endsAt').notNull(), status: text('status').notNull().default('planned'), priority: real('priority').notNull().default(0), createdAt: timestamp('createdAt').notNull().defaultNow(),
+})
+
+export const revisionQueues = pgTable('revision_queues', {
+  id: text('id').primaryKey(), userId: text('userId').notNull(), planId: text('planId'), conceptKey: text('conceptKey').notNull(), mastery: real('mastery').notNull().default(0), reviewNumber: real('reviewNumber').notNull().default(0), nextReviewAt: timestamp('nextReviewAt').notNull(), lastReviewedAt: timestamp('lastReviewedAt'), createdAt: timestamp('createdAt').notNull().defaultNow(), updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+})
+
+export const analyticsMilestones = pgTable('analytics_milestones', {
+  id: text('id').primaryKey(), userId: text('userId').notNull(), planId: text('planId'), milestoneKey: text('milestoneKey').notNull(), value: real('value').notNull().default(0), metadata: jsonb('metadata'), achievedAt: timestamp('achievedAt').notNull().defaultNow(),
+})
+
 export const verification = pgTable('verification', {
   id: text('id').primaryKey(),
   identifier: text('identifier').notNull(),
