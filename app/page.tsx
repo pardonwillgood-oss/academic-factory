@@ -165,7 +165,7 @@ export default function Page() {
     <main className={`site-shell ${theme === 'dark' ? 'theme-dark' : ''}`}>
       <header className="marketing-nav">
         <a className="brand" href="#top" aria-label="Academic Factory home">
-          <span className="brand-mark"><Sparkles size={16} /></span>
+          <span className="brand-mark"><img src="/logo.png" alt="Gear logo" style={{ width: 16, height: 16 }} /></span>
           <span>Academic <span>Factory</span></span>
         </a>
         <nav className="marketing-links" aria-label="Main navigation">
