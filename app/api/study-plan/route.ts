@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const formData = await request.formData()
     material = String(formData.get('material') ?? '').trim()
     const uploadedFile = formData.get('file')
-    if (!material && uploadedFile instanceof File && uploadedFile.type === 'application/pdf') {
+    if (!material && uploadedFile instanceof File && (uploadedFile.type === 'application/pdf' || uploadedFile.name.toLowerCase().endsWith('.pdf'))) {
       if (uploadedFile.size > 3_000_000) return Response.json({ error: 'This PDF is too large. Please use a PDF under 3 MB or paste the chapter text.' }, { status: 413 })
       const parser = new PDFParse({ data: Buffer.from(await uploadedFile.arrayBuffer()) })
       const parsed = await parser.getText()
