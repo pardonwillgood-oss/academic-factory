@@ -112,7 +112,11 @@ export default function Page() {
         return
       }
       fileName = selectedFile.name
-      material = await selectedFile.text()
+      if (selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf')) {
+        material = ''
+      } else {
+        material = await selectedFile.text()
+      }
     }
     if (!material && !fileData) {
       showNotice('Paste at least a few sentences or choose a text-based file.')
@@ -135,7 +139,10 @@ export default function Page() {
         }
         throw new Error(`The study planner could not process this request (${response.status}). Please try again.`)
       }
-      if (!response.ok) throw new Error(result.error ?? 'We could not build your study path.')
+      if (!response.ok) {
+        const message = typeof result.error === 'string' ? result.error : 'We could not build your study path.'
+        throw new Error(message)
+      }
       setStudyPlan(result)
       setShowUpload(false)
       setMaterialText('')
