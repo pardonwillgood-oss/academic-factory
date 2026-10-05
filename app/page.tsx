@@ -105,7 +105,6 @@ export default function Page() {
 
   const handleUpload = async () => {
     let material = materialText.trim()
-    let fileData: string | undefined
     let fileName: string | undefined
     if (!material && selectedFile) {
       if (selectedFile.size > 3_000_000) {
@@ -113,12 +112,7 @@ export default function Page() {
         return
       }
       fileName = selectedFile.name
-      if (selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf')) {
-        const encoded = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = () => reject(reader.error); reader.readAsDataURL(selectedFile) })
-        fileData = encoded
-      } else {
-        material = await selectedFile.text()
-      }
+      material = await selectedFile.text()
     }
     if (!material && !fileData) {
       showNotice('Paste at least a few sentences or choose a text-based file.')
@@ -126,7 +120,11 @@ export default function Page() {
     }
     setIsGenerating(true)
     try {
-      const response = await fetch('/api/study-plan', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ material, fileData, fileName }) })
+      const formData = new FormData()
+      formData.set('material', material)
+      if (selectedFile) formData.set('file', selectedFile)
+      if (fileName) formData.set('fileName', fileName)
+      const response = await fetch('/api/study-plan', { method: 'POST', headers: { Accept: 'application/json' }, body: formData })
       const responseText = await response.text()
       let result: { error?: string; title?: string; summary?: string; estimatedHours?: number; concepts?: Array<{ title: string; whyItMatters: string; learn: string[]; practice: string[]; revise: string[]; create: string[]; prepare: string[] }> }
       try {

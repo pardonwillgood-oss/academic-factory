@@ -31,15 +31,17 @@ export async function GET() {
 export async function POST(request: Request) {
   let material = ''
   try {
-    const body = await request.json().catch(() => ({}))
-    material = typeof body.material === 'string' ? body.material.trim() : ''
-    if (!material && typeof body.fileData === 'string' && body.fileData.startsWith('data:application/pdf;base64,')) {
-      const base64 = body.fileData.slice('data:application/pdf;base64,'.length)
-      const parser = new PDFParse({ data: Buffer.from(base64, 'base64') })
+    const formData = await request.formData()
+    material = String(formData.get('material') ?? '').trim()
+    const uploadedFile = formData.get('file')
+    if (!material && uploadedFile instanceof File && uploadedFile.type === 'application/pdf') {
+      if (uploadedFile.size > 3_000_000) return Response.json({ error: 'This PDF is too large. Please use a PDF under 3 MB or paste the chapter text.' }, { status: 413 })
+      const parser = new PDFParse({ data: Buffer.from(await uploadedFile.arrayBuffer()) })
       const parsed = await parser.getText()
       material = parsed.text.replace(/\s+/g, ' ').trim()
       await parser.destroy()
     }
+    const body = { fileName: String(formData.get('fileName') ?? (uploadedFile instanceof File ? uploadedFile.name : '')) }
     if (material.length < 20) return Response.json({ error: 'We could not read enough text from this file. Try a text-based PDF or paste the chapter text.' }, { status: 400 })
     if (material.length > 30000) material = material.slice(0, 30000)
 
