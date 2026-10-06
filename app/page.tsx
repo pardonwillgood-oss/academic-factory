@@ -118,7 +118,7 @@ export default function Page() {
         material = await selectedFile.text()
       }
     }
-    if (!material && !fileData) {
+    if (!material && !selectedFile) {
       showNotice('Paste at least a few sentences or choose a text-based file.')
       return
     }
@@ -140,16 +140,29 @@ export default function Page() {
         throw new Error(`The study planner could not process this request (${response.status}). Please try again.`)
       }
       if (!response.ok) {
-        const message = typeof result.error === 'string' ? result.error : 'We could not build your study path.'
+        const message = typeof result?.error === 'string' ? result.error : 'We could not build your study path.'
         throw new Error(message)
       }
-      setStudyPlan(result)
-      setShowUpload(false)
-      setMaterialText('')
-      setSelectedFile(null)
-      showNotice('Your personalized study path is ready.')
+      if (result?.title && result?.concepts) {
+        setStudyPlan(result as typeof studyPlan)
+        setShowUpload(false)
+        setMaterialText('')
+        setSelectedFile(null)
+        showNotice('Your personalized study path is ready.')
+      } else {
+        throw new Error('Invalid study plan format received.')
+      }
     } catch (error) {
-      showNotice(error instanceof Error ? error.message : 'We could not build your study path.')
+      let errorMsg = 'We could not build your study path.'
+      if (error instanceof Error) {
+        errorMsg = error.message
+      } else if (typeof error === 'string') {
+        errorMsg = error
+      } else if (error && typeof error === 'object' && 'message' in error) {
+        errorMsg = String((error as Record<string, unknown>).message)
+      }
+      console.error('[v0] Study plan error:', error)
+      showNotice(errorMsg)
     } finally {
       setIsGenerating(false)
     }
@@ -159,7 +172,7 @@ export default function Page() {
     <main className={`site-shell ${theme === 'dark' ? 'theme-dark' : ''}`}>
       <header className="marketing-nav">
         <a className="brand" href="#top" aria-label="Academic Factory home">
-          <span className="brand-mark"><Sparkles size={16} /></span>
+          <span className="brand-mark"><img src="/logo.png" alt="Gear logo" style={{ width: 16, height: 16 }} /></span>
           <span>Academic <span>Factory</span></span>
         </a>
         <nav className="marketing-links" aria-label="Main navigation">
