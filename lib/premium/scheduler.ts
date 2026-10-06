@@ -1,8 +1,17 @@
-export type AvailabilityWindow = { date: string; start: string; end: string }
+// offset is an ISO-8601 UTC offset such as "+05:30" or "-08:00" (the user's local timezone).
+export type AvailabilityWindow = { date: string; start: string; end: string; offset?: string }
 export type SchedulableTask = { id: string; planId?: string; title: string; minutes: number; priority: number; difficulty: number; mastery: number; dueAt?: string }
 export type ScheduledBlock = { taskId: string; title: string; startsAt: Date; endsAt: Date; priority: number }
 
-function toDate(date: string, time: string) { return new Date(`${date}T${time}:00`) }
+export const OFFSET_PATTERN = /^[+-]\d{2}:\d{2}$/
+
+export function windowBounds(window: AvailabilityWindow) {
+  const offset = window.offset && OFFSET_PATTERN.test(window.offset) ? window.offset : '+00:00'
+  return {
+    start: new Date(`${window.date}T${window.start}:00${offset}`),
+    end: new Date(`${window.date}T${window.end}:00${offset}`),
+  }
+}
 
 export function buildConflictFreeSchedule(tasks: SchedulableTask[], windows: AvailabilityWindow[], now = new Date()): ScheduledBlock[] {
   const ranked = [...tasks].sort((a, b) => {
@@ -11,14 +20,18 @@ export function buildConflictFreeSchedule(tasks: SchedulableTask[], windows: Ava
     return score(b) - score(a)
   })
   const blocks: ScheduledBlock[] = []
-  for (const window of windows) {
-    let cursor = toDate(window.date, window.start)
-    const end = toDate(window.date, window.end)
+  const scheduled = new Set<string>()
+  const orderedWindows = [...windows].sort((a, b) => windowBounds(a).start.getTime() - windowBounds(b).start.getTime())
+  for (const window of orderedWindows) {
+    const bounds = windowBounds(window)
+    if (Number.isNaN(bounds.start.getTime()) || Number.isNaN(bounds.end.getTime())) continue
+    let cursor = bounds.start
     for (const task of ranked) {
-      if (blocks.some((block) => block.taskId === task.id)) continue
+      if (scheduled.has(task.id)) continue
       const taskEnd = new Date(cursor.getTime() + task.minutes * 60000)
-      if (taskEnd <= end) {
+      if (taskEnd <= bounds.end) {
         blocks.push({ taskId: task.id, title: task.title, startsAt: new Date(cursor), endsAt: taskEnd, priority: task.priority })
+        scheduled.add(task.id)
         cursor = new Date(taskEnd.getTime() + 5 * 60000)
       }
     }

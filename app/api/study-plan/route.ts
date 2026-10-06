@@ -5,6 +5,12 @@ import { db } from '@/lib/db'
 import { studyPlan } from '@/lib/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import { z } from 'zod'
+import { buildStudyPlan, type GeneratedPlan } from '@/lib/study/build-plan'
+import { buildAiPlan } from '@/lib/study/ai-plan'
+import { FREE_PLAN_LIMIT, getTier } from '@/lib/billing/tier'
+
+export const runtime = 'nodejs'
+export const maxDuration = 30
 
 const planSchema = z.object({
   title: z.string(),
@@ -18,89 +24,129 @@ const planSchema = z.object({
     revise: z.array(z.string()).min(1).max(4),
     create: z.array(z.string()).min(1).max(3),
     prepare: z.array(z.string()).min(1).max(3),
+    cards: z.array(z.object({ q: z.string(), a: z.string() })).max(8).optional(),
+    quiz: z.array(z.object({ q: z.string(), options: z.array(z.string()).min(2).max(6), answer: z.number().int() })).max(6).optional(),
   })).min(1).max(12),
 })
 
+async function currentUserId() {
+  try {
+    const session = await auth.api.getSession({ headers: await headers() })
+    return session?.user?.id ?? null
+  } catch (error) {
+    console.error('Could not read session', error)
+    return null
+  }
+}
+
+// Flashcards and quizzes are Pro features: free users never receive them from the server.
+function forTier<T extends { concepts?: Array<Record<string, unknown>> }>(plan: T, isPro: boolean): T {
+  if (isPro || !plan.concepts) return plan
+  return { ...plan, concepts: plan.concepts.map(({ cards: _cards, quiz: _quiz, ...rest }) => rest) }
+}
+
+// Only ever returns the signed-in user's own plans.
 export async function GET() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) return Response.json({ plans: [] })
-  const plans = await db.select().from(studyPlan).where(eq(studyPlan.userId, session.user.id)).orderBy(desc(studyPlan.createdAt))
-  return Response.json({ plans })
+  const userId = await currentUserId()
+  if (!userId) return Response.json({ plans: [] })
+  try {
+    const [plans, tier] = await Promise.all([
+      db.select().from(studyPlan).where(eq(studyPlan.userId, userId)).orderBy(desc(studyPlan.createdAt)),
+      getTier(userId),
+    ])
+    return Response.json({ plans: plans.map((p) => ({ ...p, plan: forTier({ concepts: p.plan as Array<Record<string, unknown>> }, tier.isPro).concepts })), tier: tier.tier, freeLimit: FREE_PLAN_LIMIT })
+  } catch (error) {
+    console.error('Could not load study plans', error)
+    return Response.json({ plans: [] })
+  }
 }
 
 export async function POST(request: Request) {
   let material = ''
+  let fileName = ''
   try {
     const formData = await request.formData()
     material = String(formData.get('material') ?? '').trim()
     const uploadedFile = formData.get('file')
-    if (!material && uploadedFile instanceof File && (uploadedFile.type === 'application/pdf' || uploadedFile.name.toLowerCase().endsWith('.pdf'))) {
-      if (uploadedFile.size > 3_000_000) return Response.json({ error: 'This PDF is too large. Please use a PDF under 3 MB or paste the chapter text.' }, { status: 413 })
-      const parser = new PDFParse({ data: Buffer.from(await uploadedFile.arrayBuffer()) })
-      const parsed = await parser.getText()
-      material = parsed.text.replace(/\s+/g, ' ').trim()
-      await parser.destroy()
+    if (uploadedFile instanceof File) fileName = String(formData.get('fileName') ?? uploadedFile.name)
+
+    if (!material && uploadedFile instanceof File) {
+      const isPdf = uploadedFile.type === 'application/pdf' || uploadedFile.name.toLowerCase().endsWith('.pdf')
+      if (uploadedFile.size > 3_000_000) {
+        return Response.json({ error: 'This file is too large. Please use a file under 3 MB or paste the chapter text.' }, { status: 413 })
+      }
+      if (isPdf) {
+        try {
+          const parser = new PDFParse({ data: new Uint8Array(await uploadedFile.arrayBuffer()) })
+          try {
+            const parsed = await parser.getText()
+            material = parsed.text
+          } finally {
+            await parser.destroy().catch(() => {})
+          }
+        } catch (error) {
+          console.error('PDF parsing failed', error)
+          return Response.json({ error: 'We could not read this PDF. Please paste the chapter text instead.' }, { status: 422 })
+        }
+      } else {
+        material = (await uploadedFile.text()).trim()
+      }
     }
-    const body = { fileName: String(formData.get('fileName') ?? (uploadedFile instanceof File ? uploadedFile.name : '')) }
-    if (material.length < 20) return Response.json({ error: 'We could not read enough text from this file. Try a text-based PDF or paste the chapter text.' }, { status: 400 })
+
+    if (material.replace(/\s+/g, ' ').trim().length < 20) {
+      return Response.json({ error: 'We could not read enough text from this file. Try a text-based PDF or paste the chapter text.' }, { status: 400 })
+    }
     if (material.length > 30000) material = material.slice(0, 30000)
 
-    const plan = buildFallbackPlan(material)
-    void savePlanForSignedInUser(plan, body.fileName)
-    return Response.json({ ...plan, generatedWith: 'Academic Factory planner' }, { status: 200 })
+    const userId = await currentUserId()
+    const tier = userId ? await getTier(userId) : null
+    if (userId && tier && !tier.isPro) {
+      const existing = await db.select({ id: studyPlan.id }).from(studyPlan).where(eq(studyPlan.userId, userId))
+      if (existing.length >= FREE_PLAN_LIMIT) {
+        return Response.json({ error: `The free plan includes ${FREE_PLAN_LIMIT} saved study paths. Upgrade to Pro for unlimited paths.`, upgrade: true }, { status: 402 })
+      }
+    }
+
+    // Pro users get the AI planner when an API key is configured; everyone else (and any AI failure) uses the built-in planner.
+    let candidate: GeneratedPlan | null = null
+    let generatedWith = 'Academic Factory planner'
+    if (tier?.isPro) {
+      candidate = await buildAiPlan(material)
+      if (candidate && !planSchema.safeParse(candidate).success) candidate = null
+      if (candidate) generatedWith = 'Academic Factory AI planner'
+    }
+    const parsedPlan = planSchema.safeParse(candidate ?? buildStudyPlan(material))
+    if (!parsedPlan.success) {
+      return Response.json({ error: 'We could not turn this material into a plan. Try adding more detail.' }, { status: 400 })
+    }
+    const plan = parsedPlan.data as GeneratedPlan
+
+    // Awaited on purpose: on serverless the function may be frozen once the response is sent.
+    const saved = await savePlan(plan, fileName || undefined)
+    return Response.json({ ...forTier(plan, Boolean(tier?.isPro)), id: saved?.id ?? null, saved: Boolean(saved), generatedWith, tier: tier?.tier ?? 'anonymous' })
   } catch (error) {
-    console.error('[v0] Study plan generation failed', error)
-    return createFallbackResponse(material)
+    console.error('Study plan generation failed', error)
+    return Response.json({ error: 'Something went wrong while building your plan. Please try again.' }, { status: 500 })
   }
 }
 
-function createFallbackResponse(material: string) {
+async function savePlan(plan: GeneratedPlan, materialName?: string) {
+  const userId = await currentUserId()
+  if (!userId) return null
   try {
-    const fallback = buildFallbackPlan(material)
-    void savePlanForSignedInUser(fallback, undefined)
-    return Response.json({ ...fallback, generatedWith: 'Academic Factory planner' }, { status: 200 })
-  } catch (fallbackError) {
-    console.error('[v0] Fallback study plan failed', fallbackError)
-    return Response.json({ error: 'Please paste at least a few sentences of study material and try again.' }, { status: 400 })
-  }
-}
-
-async function savePlanForSignedInUser(plan: z.infer<typeof planSchema>, materialName?: string) {
-  try {
-    const session = await auth.api.getSession({ headers: await headers() })
-    if (!session?.user) return
+    const id = crypto.randomUUID()
     await db.insert(studyPlan).values({
-      id: crypto.randomUUID(),
-      userId: session.user.id,
+      id,
+      userId,
       title: plan.title,
       summary: plan.summary,
       estimatedHours: plan.estimatedHours,
       materialName: materialName ?? null,
       plan: plan.concepts,
     })
+    return { id }
   } catch (error) {
-    console.error('[v0] Could not save study plan; returning generated plan anyway', error)
-  }
-}
-
-function buildFallbackPlan(material: string) {
-  const sentences = material.split(/[.!?]+/).map((part) => part.trim()).filter(Boolean)
-  const concepts = (sentences.length ? sentences : [material]).slice(0, 8).map((sentence, index) => {
-    const title = sentence.split(/\s+/).slice(0, 7).join(' ')
-    return {
-      title: title.charAt(0).toUpperCase() + title.slice(1),
-      whyItMatters: `This is a core idea from your material. Connect it to the surrounding concepts and explain it in your own words.`,
-      learn: [`Read the section carefully and highlight the key terms.`, `Write a two-sentence explanation of: ${sentence.slice(0, 140)}.`],
-      practice: [`Create 3 questions about this idea and answer them without looking.`, `Work through one example, then explain each step.`],
-      revise: [`Make 5 flashcards for the definitions and relationships.`, `Review this concept tomorrow and again in three days.`],
-      create: [`Draw a simple concept map linking this idea to the next topic.`, `Teach the idea aloud in under two minutes.`],
-      prepare: [`Answer an exam-style question on this concept in 10 minutes.`, `List one common mistake and how to avoid it.`],
-    }
-  })
-  return {
-    title: 'Your personalized study path',
-    summary: `A practical learning loop built from ${concepts.length} key idea${concepts.length === 1 ? '' : 's'} in your material.`,
-    estimatedHours: Math.max(1, Math.ceil(concepts.length * 0.75)),
-    concepts,
+    console.error('Could not save study plan; returning generated plan anyway', error)
+    return null
   }
 }
