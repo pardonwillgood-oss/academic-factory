@@ -63,7 +63,7 @@ export function ScheduleBuilder({ planId, planTitle, exams }: { planId: string |
           <input className="settings-input" type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
           <button className="button button-outline button-small" disabled={pending || !examTitle || !examDate} onClick={saveExam}>Add exam</button>
         </div>
-      </> : <p>Upgrade to Pro to add exam dates, get revision blocks and a feasibility check.</p>}
+      </>}
     </div>
     {message && <p role="alert">{message}</p>}
   </article>
