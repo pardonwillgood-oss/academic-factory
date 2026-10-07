@@ -8,7 +8,6 @@ import { db } from '@/lib/db'
 import { studyPlan } from '@/lib/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import { ScheduleBuilder } from '@/components/schedule-builder'
-import { BillingButton } from '@/components/billing-button'
 import { CompleteBlockButton, ReviewButton } from '@/components/premium-actions'
 
 export default async function PremiumPage() {
@@ -16,8 +15,8 @@ export default async function PremiumPage() {
   if (!session?.user) redirect('/login')
   const tier = await getTier(session.user.id)
   const [latest] = await db.select({ id: studyPlan.id, title: studyPlan.title }).from(studyPlan).where(eq(studyPlan.userId, session.user.id)).orderBy(desc(studyPlan.createdAt)).limit(1)
-  const exams = tier.isPro ? await listExams() : []
-  return <main className="premium-shell"><header className="premium-header"><div><span className="eyebrow">PREMIUM PLANNER</span><h1>Your intelligent study operating system.</h1><p>One calm view for today&apos;s blocks, revision pressure, and progress.</p></div><span className="premium-badge">{tier.isPro ? 'PRO' : 'FREE'}</span><a className="auth-back" href="/#workspace">← Back to workspace</a><BillingButton isPro={tier.isPro} hasCustomer={tier.hasCustomer} />{tier.isPro && <a className="button button-outline button-small" href="/practice">Practice</a>}</header><section className="premium-grid"><ScheduleBuilder planId={latest?.id ?? null} planTitle={latest?.title ?? null} isPro={tier.isPro} exams={exams.map((e) => ({ id: e.id, title: e.title, examDate: e.examDate.toISOString() }))} /></section><Suspense fallback={<DashboardSkeleton />}><PremiumDashboard /></Suspense></main>
+  const exams = await listExams()
+  return <main className="premium-shell"><header className="premium-header"><div><span className="eyebrow">PREMIUM PLANNER</span><h1>Your intelligent study operating system.</h1><p>One calm view for today&apos;s blocks, revision pressure, and progress.</p></div><span className="premium-badge">STUDENT PLANNER</span><a className="auth-back" href="/#workspace">← Back to workspace</a>{tier.isPro && <a className="button button-outline button-small" href="/practice">Practice</a>}</header><section className="premium-grid"><ScheduleBuilder planId={latest?.id ?? null} planTitle={latest?.title ?? null} exams={exams.map((e) => ({ id: e.id, title: e.title, examDate: e.examDate.toISOString() }))} /></section><Suspense fallback={<DashboardSkeleton />}><PremiumDashboard /></Suspense></main>
 }
 
 async function PremiumDashboard() {
