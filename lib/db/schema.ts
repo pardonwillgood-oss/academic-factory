@@ -71,7 +71,8 @@ export const verification = pgTable('verification', {
   updatedAt: timestamp('updatedAt').defaultNow(),
 })
 
-// --- Additive tables (created lazily by lib/db/ensure.ts; existing tables above are untouched) ---export const studyExam = pgTable('study_exam', {
+// --- Additive tables (created lazily by lib/db/ensure.ts; existing tables above are untouched) ---
+export const studyExam = pgTable('study_exam', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
   planId: text('planId'),
