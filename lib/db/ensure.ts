@@ -23,9 +23,7 @@ export function ensureExtraTables() {
         "examDate" timestamp NOT NULL,
         "createdAt" timestamp NOT NULL DEFAULT now()
       )`)
-      await pool.query(`CREATE INDEX IF NOT EXISTS study_exam_user_idx ON study_exam ("userId")`)
-      await pool.query(`CREATE INDEX IF NOT EXISTS user_plan_customer_idx ON user_plan ("stripeCustomerId")`)
-    })().catch((error) => {
+      await pool.query(`CREATE INDEX IF NOT EXISTS study_exam_user_idx ON study_exam ("userId")`)    })().catch((error) => {
       ready = null
       throw error
     })
