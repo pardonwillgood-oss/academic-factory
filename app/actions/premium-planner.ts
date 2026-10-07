@@ -66,7 +66,7 @@ export async function reviewConcept(input: { id: string; mastery: number }) {
   const intervals = [1, 3, 7, 14, 30]
   const reviewNumber = Number(current.reviewNumber) + 1
   const interval = intervals[Math.min(reviewNumber - 1, intervals.length - 1)]
-  const nextReviewAt = new Date(Date.now() + interval * 86400000)
+  const nextReviewAt = nextRevisionDate(reviewNumber - 1, new Date(), mastery)
   await db.update(revisionQueues).set({ mastery, reviewNumber, nextReviewAt, lastReviewedAt: new Date(), updatedAt: new Date() }).where(and(eq(revisionQueues.id, input.id), eq(revisionQueues.userId, userId)))
   revalidatePath('/premium')
   return { nextReviewAt, interval }
@@ -131,14 +131,12 @@ export async function schedulePlanFromStudyPlan(input: { planId: string; tzOffse
 
   const now = new Date()
   let exam: { title: string; examDate: Date } | null = null
-  if (tier.isPro) {
-    try {
-      await ensureExtraTables()
-      const exams = await db.select().from(studyExam).where(eq(studyExam.userId, userId)).orderBy(asc(studyExam.examDate))
-      exam = exams.find((row) => row.examDate > now && (!row.planId || row.planId === plan.id)) ?? null
-    } catch (error) {
-      console.error('Could not load exams', error)
-    }
+  try {
+    await ensureExtraTables()
+    const exams = await db.select().from(studyExam).where(eq(studyExam.userId, userId)).orderBy(asc(studyExam.examDate))
+    exam = exams.find((row) => row.examDate > now && (!row.planId || row.planId === plan.id)) ?? null
+  } catch (error) {
+    console.error('Could not load exams', error)
   }
   const horizonDays = exam ? Math.min(45, Math.max(1, Math.ceil((exam.examDate.getTime() - now.getTime()) / 86400000))) : 7
   const dueAt = exam?.examDate.toISOString()
@@ -148,10 +146,10 @@ export async function schedulePlanFromStudyPlan(input: { planId: string; tzOffse
     const priority = titles.length > 1 ? 1 - index / titles.length : 1
     const mastery = masteryByKey.get(title) ?? 0
     const stages: Array<[string, number]> = [['Learn', 30], ['Practice', 25]]
-    if (tier.isPro) stages.push(['Revise', 15])
+    stages.push(['Revise', 15])
     for (const [stage, minutes] of stages) {
       const id = `${title} — ${stage}`
-      if (!completedIds.has(id)) tasks.push({ id, planId: plan.id, title: id, minutes, priority, difficulty: 0.5, mastery, dueAt })
+      if (!completedIds.has(id)) tasks.push({ id, planId: plan.id, title: id, minutes, priority, difficulty: stage === 'Revise' ? 0.65 : 0.5, mastery, dueAt, stage: stage.toLowerCase() as 'learn' | 'practice' | 'revise' })
     }
   })
 
@@ -210,7 +208,6 @@ type Result<T = Record<string, never>> = ({ ok: true } & T) | { ok: false; error
 export async function addExam(input: { title: string; date: string; planId?: string }): Promise<Result> {
   const userId = await getUserId()
   const tier = await getTier(userId)
-  if (!tier.isPro) return { ok: false, error: 'Exam-date planning is a Pro feature.' }
   const title = input.title.trim().slice(0, 80)
   if (!title) return { ok: false, error: 'Enter an exam name.' }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) return { ok: false, error: 'Choose a valid date.' }
@@ -245,7 +242,6 @@ export async function listExams() {
 export async function submitQuizResult(input: { planId: string; results: Array<{ concept: string; correct: number; total: number }> }): Promise<Result<{ percent: number }>> {
   const userId = await getUserId()
   const tier = await getTier(userId)
-  if (!tier.isPro) return { ok: false, error: 'Practice quizzes are a Pro feature.' }
   await assertOwnsPlan(userId, input.planId)
   let correctSum = 0
   let totalSum = 0
