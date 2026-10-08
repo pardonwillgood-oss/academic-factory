@@ -7,7 +7,6 @@ import { desc, eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { buildStudyPlan, type GeneratedPlan } from '@/lib/study/build-plan'
 import { buildAiPlan } from '@/lib/study/ai-plan'
-import { FREE_PLAN_LIMIT, getTier } from '@/lib/billing/tier'
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -39,22 +38,13 @@ async function currentUserId() {
   }
 }
 
-// Flashcards and quizzes are Pro features: free users never receive them from the server.
-function forTier<T extends { concepts?: Array<Record<string, unknown>> }>(plan: T, isPro: boolean): T {
-  if (isPro || !plan.concepts) return plan
-  return { ...plan, concepts: plan.concepts.map(({ cards: _cards, quiz: _quiz, ...rest }) => rest) }
-}
-
 // Only ever returns the signed-in user's own plans.
 export async function GET() {
   const userId = await currentUserId()
   if (!userId) return Response.json({ plans: [] })
   try {
-    const [plans, tier] = await Promise.all([
-      db.select().from(studyPlan).where(eq(studyPlan.userId, userId)).orderBy(desc(studyPlan.createdAt)),
-      getTier(userId),
-    ])
-    return Response.json({ plans: plans.map((p) => ({ ...p, plan: forTier({ concepts: p.plan as Array<Record<string, unknown>> }, tier.isPro).concepts })), tier: tier.tier, freeLimit: FREE_PLAN_LIMIT })
+    const plans = await db.select().from(studyPlan).where(eq(studyPlan.userId, userId)).orderBy(desc(studyPlan.createdAt))
+    return Response.json({ plans })
   } catch (error) {
     console.error('Could not load study plans', error)
     return Response.json({ plans: [] })
@@ -98,23 +88,10 @@ export async function POST(request: Request) {
     }
     if (material.length > 30000) material = material.slice(0, 30000)
 
-    const userId = await currentUserId()
-    const tier = userId ? await getTier(userId) : null
-    if (userId && tier && !tier.isPro) {
-      const existing = await db.select({ id: studyPlan.id }).from(studyPlan).where(eq(studyPlan.userId, userId))
-      if (existing.length >= FREE_PLAN_LIMIT) {
-        return Response.json({ error: `The free plan includes ${FREE_PLAN_LIMIT} saved study paths. Upgrade to Pro for unlimited paths.`, upgrade: true }, { status: 402 })
-      }
-    }
-
-    // Pro users get the AI planner when an API key is configured; everyone else (and any AI failure) uses the built-in planner.
-    let candidate: GeneratedPlan | null = null
-    let generatedWith = 'Academic Factory planner'
-    if (tier?.isPro) {
-      candidate = await buildAiPlan(material)
-      if (candidate && !planSchema.safeParse(candidate).success) candidate = null
-      if (candidate) generatedWith = 'Academic Factory AI planner'
-    }
+    // Use the AI planner whenever its optional API key is configured; otherwise fall back to the built-in planner.
+    let candidate: GeneratedPlan | null = await buildAiPlan(material)
+    if (candidate && !planSchema.safeParse(candidate).success) candidate = null
+    const generatedWith = candidate ? 'Academic Factory AI planner' : 'Academic Factory planner'
     const parsedPlan = planSchema.safeParse(candidate ?? buildStudyPlan(material))
     if (!parsedPlan.success) {
       return Response.json({ error: 'We could not turn this material into a plan. Try adding more detail.' }, { status: 400 })
@@ -123,7 +100,7 @@ export async function POST(request: Request) {
 
     // Awaited on purpose: on serverless the function may be frozen once the response is sent.
     const saved = await savePlan(plan, fileName || undefined)
-    return Response.json({ ...forTier(plan, Boolean(tier?.isPro)), id: saved?.id ?? null, saved: Boolean(saved), generatedWith, tier: tier?.tier ?? 'anonymous' })
+    return Response.json({ ...plan, id: saved?.id ?? null, saved: Boolean(saved), generatedWith })
   } catch (error) {
     console.error('Study plan generation failed', error)
     return Response.json({ error: 'Something went wrong while building your plan. Please try again.' }, { status: 500 })

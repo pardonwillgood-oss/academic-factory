@@ -7,7 +7,6 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { analyticsMilestones, revisionQueues, smartSchedules, studyExam, studyPlan } from '@/lib/db/schema'
 import { ensureExtraTables } from '@/lib/db/ensure'
-import { getTier } from '@/lib/billing/tier'
 import { buildConflictFreeSchedule, nextRevisionDate, OFFSET_PATTERN, windowBounds, type AvailabilityWindow, type SchedulableTask } from '@/lib/premium/scheduler'
 
 async function getUserId() {
@@ -110,13 +109,12 @@ const clampInt = (value: unknown, min: number, max: number, fallback: number) =>
 const pad = (n: number) => String(n).padStart(2, '0')
 
 // Turns a saved study plan into time blocks + a spaced-revision queue. Everything is scoped to the signed-in user.
-// Free: 7-day Learn+Practice schedule. Pro: works backwards from your nearest exam, adds Revise blocks and a feasibility check.
+// The scheduler adapts to progress, available time, and the nearest exam while keeping the full learning loop available to every student.
 export async function schedulePlanFromStudyPlan(input: { planId: string; tzOffset: string; startHour?: number; endHour?: number }) {
   const userId = await getUserId()
   if (!OFFSET_PATTERN.test(input.tzOffset)) throw new Error('Invalid timezone offset')
   const [plan] = await db.select().from(studyPlan).where(and(eq(studyPlan.id, input.planId), eq(studyPlan.userId, userId))).limit(1)
   if (!plan) throw new Error('Study plan not found')
-  const tier = await getTier(userId)
 
   const startHour = clampInt(input.startHour, 5, 22, 17)
   const endHour = clampInt(input.endHour, startHour + 1, 23, Math.min(23, startHour + 3))
@@ -199,7 +197,6 @@ export async function schedulePlanFromStudyPlan(input: { planId: string; tzOffse
     neededMinutesPerDay: Math.ceil(totalMinutes / daysUsed),
     examTitle: exam?.title ?? null,
     daysToExam: exam ? Math.ceil((exam.examDate.getTime() - now.getTime()) / 86400000) : null,
-    isPro: tier.isPro,
   }
 }
 
@@ -207,7 +204,6 @@ type Result<T = Record<string, never>> = ({ ok: true } & T) | { ok: false; error
 
 export async function addExam(input: { title: string; date: string; planId?: string }): Promise<Result> {
   const userId = await getUserId()
-  const tier = await getTier(userId)
   const title = input.title.trim().slice(0, 80)
   if (!title) return { ok: false, error: 'Enter an exam name.' }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) return { ok: false, error: 'Choose a valid date.' }
@@ -241,7 +237,6 @@ export async function listExams() {
 // Quiz results feed the same mastery + spaced-repetition queue used by revision.
 export async function submitQuizResult(input: { planId: string; results: Array<{ concept: string; correct: number; total: number }> }): Promise<Result<{ percent: number }>> {
   const userId = await getUserId()
-  const tier = await getTier(userId)
   await assertOwnsPlan(userId, input.planId)
   let correctSum = 0
   let totalSum = 0
