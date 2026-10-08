@@ -6,8 +6,8 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  // pdf-parse (pdf.js) must not be bundled by webpack/turbopack on the server.
-  serverExternalPackages: ['pdf-parse'],
+  // pdf-parse (pdf.js) uses worker/canvas code that must stay external on Vercel.
+  serverExternalPackages: ['pdf-parse', '@napi-rs/canvas'],
 }
 
 export default nextConfig

@@ -1,3 +1,4 @@
+import { CanvasFactory } from 'pdf-parse/worker'
 import { PDFParse } from 'pdf-parse'
 import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
@@ -67,7 +68,10 @@ export async function POST(request: Request) {
       }
       if (isPdf) {
         try {
-          const parser = new PDFParse({ data: new Uint8Array(await uploadedFile.arrayBuffer()) })
+          const parser = new PDFParse({
+            data: new Uint8Array(await uploadedFile.arrayBuffer()),
+            CanvasFactory,
+          })
           try {
             const parsed = await parser.getText()
             material = parsed.text
