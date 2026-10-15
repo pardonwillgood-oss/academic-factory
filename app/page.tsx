@@ -54,6 +54,34 @@ type DashboardData = { signedIn?: boolean; error?: boolean; tier?: string; strea
 
 const fetcher = (url: string) => fetch(url).then((response) => (response.ok ? response.json() : { plans: [] })).catch(() => ({ plans: [] }))
 
+const MAX_UPLOAD_BYTES = 25_000_000
+const MAX_EXTRACTED_CHARACTERS = 30_000
+
+async function extractPdfText(file: File): Promise<string> {
+  const pdfjs = await import('pdfjs-dist/build/pdf.mjs')
+  pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjs.version}/build/pdf.worker.mjs`
+
+  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) })
+  const pdf = await loadingTask.promise
+  const textParts: string[] = []
+  let characterCount = 0
+
+  try {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages && characterCount < MAX_EXTRACTED_CHARACTERS; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber)
+      const content = await page.getTextContent()
+      const pageText = content.items.map((item) => ('str' in item ? item.str : '')).join(' ')
+      textParts.push(pageText)
+      characterCount += pageText.length
+      page.cleanup()
+    }
+  } finally {
+    await pdf.destroy()
+  }
+
+  return textParts.join('\n').slice(0, MAX_EXTRACTED_CHARACTERS).trim()
+}
+
 const plan = [
   { title: 'Revise integration', subject: 'Mathematics', duration: '25 min', done: true, color: 'lavender' },
   { title: 'Practice: Electrostatics', subject: 'Physics', duration: '20 min', done: false, color: 'mint' },
@@ -159,28 +187,31 @@ export default function Page() {
 
   const handleUpload = async () => {
     let material = materialText.trim()
-    let fileName: string | undefined
-    if (!material && selectedFile) {
-      if (selectedFile.size > 3_000_000) {
-        showNotice('This file is too large for the planner. Please paste the chapter text or use a PDF under 3 MB.')
-        return
-      }
-      fileName = selectedFile.name
-      if (selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf')) {
-        material = ''
-      } else {
-        material = await selectedFile.text()
-      }
-    }
+    const fileName = material ? undefined : selectedFile?.name
+
     if (!material && !selectedFile) {
       showNotice('Paste at least a few sentences or choose a text-based file.')
       return
     }
+    if (!material && selectedFile && selectedFile.size > MAX_UPLOAD_BYTES) {
+      showNotice('This file is too large. Please choose a PDF or text file under 25 MB.')
+      return
+    }
+
     setIsGenerating(true)
     try {
+      if (!material && selectedFile) {
+        const isPdf = selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf')
+        material = isPdf ? await extractPdfText(selectedFile) : (await selectedFile.text()).trim()
+        if (!material.trim()) {
+          throw new Error(isPdf
+            ? 'We could not extract readable text from this PDF. Try a text-based PDF or paste the chapter text.'
+            : 'We could not read enough text from this file. Please paste the chapter text instead.')
+        }
+      }
+
       const formData = new FormData()
-      formData.set('material', material)
-      if (selectedFile) formData.set('file', selectedFile)
+      formData.set('material', material.slice(0, MAX_EXTRACTED_CHARACTERS))
       if (fileName) formData.set('fileName', fileName)
       const response = await fetch('/api/study-plan', { method: 'POST', headers: { Accept: 'application/json' }, body: formData })
       const responseText = await response.text()
@@ -189,7 +220,7 @@ export default function Page() {
         result = JSON.parse(responseText)
       } catch {
         if (response.status === 413 || responseText.includes('Request Entity')) {
-          throw new Error('This upload is too large. Please paste the chapter text or use a PDF under 3 MB.')
+          throw new Error('The study planner request was too large. Please try again with a text-based PDF or paste the chapter text.')
         }
         throw new Error(`The study planner could not process this request (${response.status}). Please try again.`)
       }
@@ -273,7 +304,7 @@ export default function Page() {
       <footer className="footer"><div className="footer-top"><a className="brand" href="#top"><span className="brand-mark"><Sparkles size={16} /></span><span>Academic <span>Factory</span></span></a><span className="footer-note">The academic operating system for curious students.</span><div className="footer-links"><a href="#product">Product</a><a href="#faq">Help</a><a href="mailto:hello@academicfactory.app">Contact</a></div></div><div className="footer-bottom"><span>© 2024 Academic Factory. Built for the next chapter.</span><span><a href="#faq">Privacy</a><a href="#faq">Terms</a></span></div></footer>
 
       {settingsOpen && session?.user && <div className="modal-backdrop" role="presentation" onClick={() => setSettingsOpen(false)}><div className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings"><X size={18} /></button><div className="settings-heading"><Settings size={20} /><span>Account settings</span></div><h3 id="settings-title">Make it yours.</h3><p>Manage your profile, appearance and account access.</p><section className="settings-section"><label className="settings-label" htmlFor="display-name">Display name</label><input id="display-name" className="settings-input" value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={60} /><button className="button button-dark full-width" onClick={handleSaveProfile}>Save changes</button></section><section className="settings-section"><span className="settings-label">Theme</span><div className="theme-options"><button className={theme === 'light' ? 'selected' : ''} onClick={() => setTheme('light')}>Light</button><button className={theme === 'dark' ? 'selected' : ''} onClick={() => setTheme('dark')}>Dark</button></div></section><section className="settings-section settings-danger"><button className="settings-action" onClick={handleLogout}>Log out</button><button className="settings-action danger" onClick={handleDeleteAccount}>Delete account</button></section></div></div>}
-      {showUpload && <div className="modal-backdrop" role="presentation" onClick={() => setShowUpload(false)}><div className="upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setShowUpload(false)} aria-label="Close upload dialog"><X size={18} /></button><div className="upload-icon"><Upload size={23} /></div><h3 id="upload-title">Add your first material</h3><p>Paste notes, a syllabus, or chapter text and we&apos;ll turn it into a complete learning loop.</p><textarea className="material-input" value={materialText} onChange={(event) => setMaterialText(event.target.value)} placeholder="Example: Photosynthesis converts light energy into chemical energy..." rows={7} /><label className="drop-zone"><input type="file" accept=".pdf,.txt,.md,.csv" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /><FileText size={23} /><b>{selectedFile ? selectedFile.name : 'Or choose a text file'}</b><span>PDF, TXT, MD or CSV</span></label><button className="button button-dark full-width" onClick={handleUpload} disabled={isGenerating}>{isGenerating ? 'Building your path...' : 'Build my study path'} <ArrowUpRight size={16} /></button></div></div>}
+      {showUpload && <div className="modal-backdrop" role="presentation" onClick={() => setShowUpload(false)}><div className="upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setShowUpload(false)} aria-label="Close upload dialog"><X size={18} /></button><div className="upload-icon"><Upload size={23} /></div><h3 id="upload-title">Add your first material</h3><p>Paste notes, a syllabus, or chapter text and we&apos;ll turn it into a complete learning loop.</p><textarea className="material-input" value={materialText} onChange={(event) => setMaterialText(event.target.value)} placeholder="Example: Photosynthesis converts light energy into chemical energy..." rows={7} /><label className="drop-zone"><input type="file" accept=".pdf,.txt,.md,.csv" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /><FileText size={23} /><b>{selectedFile ? selectedFile.name : 'Or choose a PDF or text file'}</b><span>PDF, TXT, MD or CSV</span></label><button className="button button-dark full-width" onClick={handleUpload} disabled={isGenerating}>{isGenerating ? 'Building your path...' : 'Build my study path'} <ArrowUpRight size={16} /></button></div></div>}
       {notice && <div className="toast" role="status">{notice}</div>}
     </main>
   )

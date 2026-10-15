@@ -58,13 +58,15 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData()
     material = String(formData.get('material') ?? '').trim()
+    fileName = String(formData.get('fileName') ?? '').trim().slice(0, 255)
     const uploadedFile = formData.get('file')
-    if (uploadedFile instanceof File) fileName = String(formData.get('fileName') ?? uploadedFile.name)
+    if (!fileName && uploadedFile instanceof File) fileName = uploadedFile.name
 
     if (!material && uploadedFile instanceof File) {
       const isPdf = uploadedFile.type === 'application/pdf' || uploadedFile.name.toLowerCase().endsWith('.pdf')
-      if (uploadedFile.size > 3_000_000) {
-        return Response.json({ error: 'This file is too large. Please use a file under 3 MB or paste the chapter text.' }, { status: 413 })
+      // Keep direct uploads below Vercel's 4.5 MB function request-body limit.
+      if (uploadedFile.size > 4_000_000) {
+        return Response.json({ error: 'This direct upload is too large. Please use a file under 4 MB or upload through the Academic Factory interface.' }, { status: 413 })
       }
       if (isPdf) {
         try {
