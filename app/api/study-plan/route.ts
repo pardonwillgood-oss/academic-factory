@@ -3,7 +3,7 @@ import { PDFParse } from 'pdf-parse'
 import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { studyPlan } from '@/lib/db/schema'
+import { smartSchedules, studyPlan } from '@/lib/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { buildStudyPlan, type GeneratedPlan } from '@/lib/study/build-plan'
@@ -44,11 +44,34 @@ export async function GET() {
   const userId = await currentUserId()
   if (!userId) return Response.json({ plans: [] })
   try {
-    const plans = await db.select().from(studyPlan).where(eq(studyPlan.userId, userId)).orderBy(desc(studyPlan.createdAt))
-    return Response.json({ plans })
+    const [plans, scheduleRows] = await Promise.all([
+      db.select().from(studyPlan).where(eq(studyPlan.userId, userId)).orderBy(desc(studyPlan.createdAt)),
+      db.select({ planId: smartSchedules.planId, status: smartSchedules.status, taskId: smartSchedules.taskId }).from(smartSchedules).where(eq(smartSchedules.userId, userId)),
+    ])
+
+    const progressByPlan = new Map<string, { completed: number; scheduled: number }>()
+    for (const row of scheduleRows) {
+      if (!row.planId || !/ — (Learn|Practice|Revise)$/.test(row.taskId ?? '')) continue
+      const counts = progressByPlan.get(row.planId) ?? { completed: 0, scheduled: 0 }
+      counts.scheduled += 1
+      if (row.status === 'completed') counts.completed += 1
+      progressByPlan.set(row.planId, counts)
+    }
+
+    const plansWithProgress = plans.map((savedPlan) => {
+      const counts = progressByPlan.get(savedPlan.id) ?? { completed: 0, scheduled: 0 }
+      const conceptCount = Array.isArray(savedPlan.plan) ? savedPlan.plan.length : 0
+      // Every concept contributes Learn, Practice and Revise steps to the study scheduler.
+      const totalTasks = conceptCount * 3
+      const completedTasks = Math.min(totalTasks, counts.completed)
+      const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
+      return { ...savedPlan, completedTasks, scheduledTasks: counts.scheduled, totalTasks, completionRate }
+    })
+
+    return Response.json({ plans: plansWithProgress })
   } catch (error) {
     console.error('Could not load study plans', error)
-    return Response.json({ plans: [] })
+    return Response.json({ error: 'Could not load study plans. Please try again.' }, { status: 500 })
   }
 }
 

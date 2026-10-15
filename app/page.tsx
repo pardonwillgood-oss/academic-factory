@@ -21,6 +21,7 @@ import {
   MoreHorizontal,
   Play,
   Plus,
+  RefreshCw,
   Settings,
   Sparkles,
   Target,
@@ -53,6 +54,11 @@ function tzString() {
 type DashboardData = { signedIn?: boolean; error?: boolean; tier?: string; streak: number; weekHours: number; readiness: number | null; todayBlocks: Array<{ id: string; title: string; status: string; minutes: number; startsAt: string }>; concepts: Array<{ title: string; progress: number; mastery: number }>; nextExam: { title: string; daysLeft: number } | null }
 
 const fetcher = (url: string) => fetch(url).then((response) => (response.ok ? response.json() : { plans: [] })).catch(() => ({ plans: [] }))
+const savedPlansFetcher = async (url: string) => {
+  const response = await fetch(url, { headers: { Accept: 'application/json' } })
+  if (!response.ok) throw new Error('Could not load saved study plans')
+  return response.json()
+}
 
 const MAX_UPLOAD_BYTES = 25_000_000
 const MAX_EXTRACTED_CHARACTERS = 30_000
@@ -104,6 +110,10 @@ export default function Page() {
   const [planId, setPlanId] = useState<string | null>(null)
   const [doneTasks, setDoneTasks] = useState<string[]>([])
   const [isScheduling, setIsScheduling] = useState(false)
+  const [planSearch, setPlanSearch] = useState('')
+  const [planStatusFilter, setPlanStatusFilter] = useState<'all' | 'in-progress' | 'completed' | 'not-scheduled'>('all')
+  const [planSort, setPlanSort] = useState<'recent' | 'progress' | 'title'>('recent')
+  const [schedulingPlanId, setSchedulingPlanId] = useState<string | null>(null)
   const router = useRouter()
   const [todayLabel, setTodayLabel] = useState('')
   useEffect(() => setTodayLabel(new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase()), [])
@@ -112,12 +122,23 @@ export default function Page() {
   const dash = dashRaw as DashboardData | undefined
   const live = Boolean(session?.user && dash?.signedIn && !dash?.error)
   const firstName = session?.user?.name?.split(' ')[0]
-  const { data: savedPlans } = useSWR(session?.user ? '/api/study-plan' : null, fetcher, { revalidateOnFocus: false })
+  const { data: savedPlans, error: savedPlansError, mutate: mutateSavedPlans, isLoading: isSavedPlansLoading } = useSWR(session?.user ? '/api/study-plan' : null, savedPlansFetcher, { revalidateOnFocus: true })
+  const allSavedPlans = Array.isArray(savedPlans?.plans) ? savedPlans.plans : []
+  const filteredSavedPlans = [...allSavedPlans]
+    .filter((item) => {
+      const query = planSearch.trim().toLowerCase()
+      const matchesSearch = !query || [item.title, item.summary, item.materialName].some((value) => String(value ?? '').toLowerCase().includes(query))
+      const completion = Math.max(0, Math.min(100, Number(item.completionRate) || 0))
+      const scheduled = Number(item.scheduledTasks) || 0
+      const matchesStatus = planStatusFilter === 'all' || (planStatusFilter === 'completed' && completion >= 100) || (planStatusFilter === 'in-progress' && scheduled > 0 && completion < 100) || (planStatusFilter === 'not-scheduled' && scheduled === 0)
+      return matchesSearch && matchesStatus
+    })
+    .sort((a, b) => planSort === 'title' ? String(a.title).localeCompare(String(b.title)) : planSort === 'progress' ? (Number(b.completionRate) || 0) - (Number(a.completionRate) || 0) : new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())
 
   useEffect(() => {
-    const latest = savedPlans?.plans?.[0]
-    if (latest) { setStudyPlan({ title: latest.title, summary: latest.summary, estimatedHours: latest.estimatedHours, concepts: latest.plan }); setPlanId(latest.id) }
-  }, [savedPlans])
+    const latest = allSavedPlans[0]
+    if (latest && !planId) { setStudyPlan({ title: latest.title, summary: latest.summary, estimatedHours: latest.estimatedHours, concepts: Array.isArray(latest.plan) ? latest.plan : [] }); setPlanId(latest.id) }
+  }, [savedPlans, planId])
 
   const showNotice = (message: string) => {
     setNotice(message)
@@ -177,13 +198,34 @@ export default function Page() {
   const toggleTask = async (item: { key: string; id?: string; done: boolean }) => {
     if (live && item.id) {
       if (item.done) return
-      try { await completeSmartSchedule(item.id); await mutateDash() } catch { showNotice('We could not update that block.') }
+      try { await completeSmartSchedule(item.id); await Promise.all([mutateDash(), mutateSavedPlans()]) } catch { showNotice('We could not update that block.') }
     } else if (studyPlan) setDoneTasks((current) => current.includes(item.key) ? current.filter((k) => k !== item.key) : [...current, item.key])
   }
 
   const subjectRows = live && dash?.concepts?.length
     ? dash.concepts.map((concept, index) => ({ name: concept.title, code: concept.title, progress: concept.progress, tone: tones[index % 3], next: `Mastery ${concept.mastery}%` }))
     : subjects
+
+  const handleScheduleSavedPlan = async (savedPlan: any) => {
+    if (!session?.user) { router.push('/login'); return }
+    setSchedulingPlanId(savedPlan.id)
+    try {
+      const minutes = -new Date().getTimezoneOffset()
+      const sign = minutes < 0 ? '-' : '+'
+      const abs = Math.abs(minutes)
+      const tzOffset = `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`
+      const result = await schedulePlanFromStudyPlan({ planId: savedPlan.id, tzOffset })
+      setStudyPlan({ title: savedPlan.title, summary: savedPlan.summary, estimatedHours: savedPlan.estimatedHours, concepts: Array.isArray(savedPlan.plan) ? savedPlan.plan : [] })
+      setPlanId(savedPlan.id)
+      await Promise.all([mutateDash(), mutateSavedPlans()])
+      showNotice(`${result.scheduled} of ${result.total} learning steps scheduled.`)
+    } catch (error) {
+      console.error('Scheduling saved plan failed', error)
+      showNotice('We could not schedule this study plan. Please try again.')
+    } finally {
+      setSchedulingPlanId(null)
+    }
+  }
 
   const handleUpload = async () => {
     let material = materialText.trim()
@@ -231,6 +273,7 @@ export default function Page() {
       if (result?.title && result?.concepts) {
         setStudyPlan(result as typeof studyPlan)
         setPlanId(result.id ?? null)
+        if (session?.user && result.id) void mutateSavedPlans()
         setDoneTasks([])
         if (session?.user && !result.id) showNotice('Plan built, but it could not be saved to your account.')
         setShowUpload(false)
@@ -296,7 +339,95 @@ export default function Page() {
 
       <section className="section workflow-section" id="how-it-works"><div className="workflow-copy"><div className="eyebrow"><span className="eyebrow-dot" /> A better way to study</div><h2>One upload.<br /><em>Every outcome.</em></h2><p>Academic Factory is built around the way learning actually happens. Your materials power a loop that gets more personal every time you use it.</p><a className="button button-dark" href="#workspace">Explore the workspace <ArrowUpRight size={17} /></a></div><div className="workflow-steps"><WorkflowStep n="01" title="Upload" copy="Your syllabus, notes, PDFs or textbooks." /><WorkflowStep n="02" title="Understand" copy="AI maps the topics, gaps and priorities." /><WorkflowStep n="03" title="Practice" copy="Learn through questions made for you." /><WorkflowStep n="04" title="Get ready" copy="Revise, create and walk into exams ready." last /></div></section>
 
-      <section className="section workspace-section" id="workspace"><div className="workspace-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> A workspace that thinks ahead</div><h2>Meet your academic <em>command center.</em></h2></div><button className="button button-dark" onClick={() => setShowUpload(true)}><Upload size={17} /> Upload material</button></div>{studyPlan && <section className="study-plan" aria-live="polite"><div className="study-plan-header"><div><span className="card-label">PERSONALIZED PATH</span><h3>{studyPlan.title}</h3><p>{studyPlan.summary}</p></div><span className="plan-hours">{studyPlan.estimatedHours}h total</span></div><div style={{ marginTop: 16 }}><button className="button button-dark button-small" onClick={handleSchedule} disabled={isScheduling}>{isScheduling ? 'Scheduling…' : 'Plan my schedule'} <ArrowUpRight size={15} /></button></div><div className="concept-grid">{studyPlan.concepts.map((concept, conceptIndex) => <article className="concept-card" key={`${conceptIndex}-${concept.title}`}><h4>{concept.title}</h4><p>{concept.whyItMatters}</p><div className="concept-columns"><PlanColumn title="Learn" items={concept.learn} /><PlanColumn title="Practice" items={concept.practice} /><PlanColumn title="Revise" items={concept.revise} /><PlanColumn title="Create" items={concept.create} /><PlanColumn title="Prepare" items={concept.prepare} /></div></article>)}</div></section>}<div className="app-window"><aside className="app-sidebar"><div className="app-brand"><span className="brand-mark"><Sparkles size={14} /></span><span>Academic <span>Factory</span></span></div><div className="app-nav-group"><small>WORKSPACE</small>{navItems.map((item) => { const Icon = item.icon; return <button key={item.label} className={`app-nav-item ${activeNav === item.label ? 'active' : ''}`} onClick={() => setActiveNav(item.label)}><Icon size={16} /> {item.label}</button> })}</div><div className="app-nav-group"><small>CREATE</small><button className="app-nav-item" onClick={() => showNotice('New project workspace is ready to configure.') }><Plus size={16} /> New project</button><button className="app-nav-item" onClick={() => showNotice('Your uploaded materials will appear here.') }><FileText size={16} /> Materials</button></div><div className="sidebar-profile"><span className="preview-avatar">{session?.user?.name?.slice(0, 2).toUpperCase() ?? 'AF'}</span><span><b>{session?.user?.name ?? 'Aarav Sharma'}</b><small>Student workspace</small></span><MoreHorizontal size={16} /></div></aside><div className="app-content"><div className="app-topbar"><button className="mobile-app-menu" onClick={() => showNotice('Use the workspace links below to switch sections.') } aria-label="Open workspace navigation"><Menu size={18} /></button><span className="crumb">Workspace / {activeNav}</span><div className="app-top-actions"><span className="streak"><Flame size={15} /> {live ? dash?.streak ?? 0 : 7} day streak</span><span className="preview-avatar">AS</span></div></div><div className="app-greeting"><div><p className="date-label">{todayLabel || ' '}</p><h3>{live ? `Welcome back, ${firstName ?? 'student'}` : 'Good afternoon, Aarav'}</h3><p>Let&apos;s make today count.</p></div><div className="app-motivation"><Trophy size={19} /><span>Keep going<br /><b>{live ? `${dash?.weekHours ?? 0}h studied this week` : '78% of your weekly goal'}</b></span></div></div><div className="stats-grid"><Stat label="EXAM READINESS" value={live ? (dash?.readiness != null ? `${dash.readiness}%` : '—') : '72%'} detail={live ? (dash?.nextExam ? `${dash.nextExam.title} in ${dash.nextExam.daysLeft} days` : 'Complete blocks and quizzes to raise it') : '+8% this week'} tone="lavender" /><Stat label="STUDY STREAK" value={live ? `${dash?.streak ?? 0} day${dash?.streak === 1 ? '' : 's'}` : '7 days'} detail={live ? 'Finish a block today to keep it' : 'Personal best: 12'} tone="peach" /><Stat label="WEEKLY PROGRESS" value={live ? `${dash?.weekHours ?? 0}h` : '14.5h'} detail={live ? 'Studied in the last 7 days' : 'Goal: 18 hours'} tone="mint" /></div><div className="app-columns"><div className="plan-panel"><div className="panel-heading"><span>Today&apos;s plan</span><button className="plain-link">View all</button></div>{todayTasks.map((item) => <div className={`task-row ${item.done ? 'task-done' : ''}`} key={item.key}><span className={`task-icon ${item.color}`} role="button" tabIndex={0} style={{ cursor: live || studyPlan ? 'pointer' : undefined }} onClick={() => toggleTask(item)}>{item.done ? <Check size={14} /> : <Clock3 size={14} />}</span><span className="task-info"><b>{item.title}</b><small>{item.subject}</small></span><span className="task-time">{item.duration}</span><button className="task-more" aria-label={`More options for ${item.title}`}><MoreHorizontal size={16} /></button></div>)}{live && todayTasks.length === 0 && <p style={{ fontSize: 12, margin: '10px 0' }}>No blocks today. <a href="/premium#builder">Build your schedule</a>.</p>}<button className="add-task" onClick={() => router.push(session?.user ? '/premium#builder' : '/login')}><Plus size={15} /> {live ? 'Plan my schedule' : 'Add a task'}</button></div><div className="subjects-panel"><div className="panel-heading"><span>{live && dash?.concepts?.length ? 'Concept progress' : 'Subject progress'}</span><button className="plain-link">Manage</button></div>{subjectRows.map((subject) => <div className="subject-row" key={subject.name}><div className={`subject-icon ${subject.tone}`}>{subject.code.slice(0, 2)}</div><div className="subject-info"><b>{subject.name}</b><small>Next: {subject.next}</small><div className="subject-progress"><i style={{ width: `${subject.progress}%` }} /></div></div><strong>{subject.progress}%</strong></div>)}</div></div></div></div></section>
+      <section className="section workspace-section" id="workspace"><div className="workspace-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> A workspace that thinks ahead</div><h2>Meet your academic <em>command center.</em></h2></div><button className="button button-dark" onClick={() => setShowUpload(true)}><Upload size={17} /> Upload material</button></div>{studyPlan && <section className="study-plan" aria-live="polite"><div className="study-plan-header"><div><span className="card-label">PERSONALIZED PATH</span><h3>{studyPlan.title}</h3><p>{studyPlan.summary}</p></div><span className="plan-hours">{studyPlan.estimatedHours}h total</span></div><div style={{ marginTop: 16 }}><button className="button button-dark button-small" onClick={handleSchedule} disabled={isScheduling}>{isScheduling ? 'Scheduling…' : 'Plan my schedule'} <ArrowUpRight size={15} /></button></div><div className="concept-grid">{studyPlan.concepts.map((concept, conceptIndex) => <article className="concept-card" key={`${conceptIndex}-${concept.title}`}><h4>{concept.title}</h4><p>{concept.whyItMatters}</p><div className="concept-columns"><PlanColumn title="Learn" items={concept.learn} /><PlanColumn title="Practice" items={concept.practice} /><PlanColumn title="Revise" items={concept.revise} /><PlanColumn title="Create" items={concept.create} /><PlanColumn title="Prepare" items={concept.prepare} /></div></article>)}</div></section>}<div className="app-window"><aside className="app-sidebar"><div className="app-brand"><span className="brand-mark"><Sparkles size={14} /></span><span>Academic <span>Factory</span></span></div><div className="app-nav-group"><small>WORKSPACE</small>{navItems.map((item) => { const Icon = item.icon; return <button key={item.label} className={`app-nav-item ${activeNav === item.label ? 'active' : ''}`} onClick={() => setActiveNav(item.label)}><Icon size={16} /> {item.label}</button> })}</div><div className="app-nav-group"><small>CREATE</small><button className="app-nav-item" onClick={() => showNotice('New project workspace is ready to configure.') }><Plus size={16} /> New project</button><button className="app-nav-item" onClick={() => showNotice('Your uploaded materials will appear here.') }><FileText size={16} /> Materials</button></div><div className="sidebar-profile"><span className="preview-avatar">{session?.user?.name?.slice(0, 2).toUpperCase() ?? 'AF'}</span><span><b>{session?.user?.name ?? 'Aarav Sharma'}</b><small>Student workspace</small></span><MoreHorizontal size={16} /></div></aside><div className="app-content"><div className="app-topbar"><button className="mobile-app-menu" onClick={() => showNotice('Use the workspace links below to switch sections.') } aria-label="Open workspace navigation"><Menu size={18} /></button><span className="crumb">Workspace / {activeNav}</span><div className="app-top-actions"><span className="streak"><Flame size={15} /> {live ? dash?.streak ?? 0 : 7} day streak</span><span className="preview-avatar">AS</span></div></div><div className="app-greeting"><div><p className="date-label">{todayLabel || ' '}</p><h3>{live ? `Welcome back, ${firstName ?? 'student'}` : 'Good afternoon, Aarav'}</h3><p>Let&apos;s make today count.</p></div><div className="app-motivation"><Trophy size={19} /><span>Keep going<br /><b>{live ? `${dash?.weekHours ?? 0}h studied this week` : '78% of your weekly goal'}</b></span></div></div><div className="stats-grid"><Stat label="EXAM READINESS" value={live ? (dash?.readiness != null ? `${dash.readiness}%` : '—') : '72%'} detail={live ? (dash?.nextExam ? `${dash.nextExam.title} in ${dash.nextExam.daysLeft} days` : 'Complete blocks and quizzes to raise it') : '+8% this week'} tone="lavender" /><Stat label="STUDY STREAK" value={live ? `${dash?.streak ?? 0} day${dash?.streak === 1 ? '' : 's'}` : '7 days'} detail={live ? 'Finish a block today to keep it' : 'Personal best: 12'} tone="peach" /><Stat label="WEEKLY PROGRESS" value={live ? `${dash?.weekHours ?? 0}h` : '14.5h'} detail={live ? 'Studied in the last 7 days' : 'Goal: 18 hours'} tone="mint" /></div>
+{/* Saved study plan cards */}
+{session?.user && <section className="saved-plans-panel" aria-labelledby="saved-plans-title">
+  <div className="saved-plans-heading">
+    <div className="saved-plans-heading-copy">
+      <span className="card-label">YOUR LIBRARY</span>
+      <h4 id="saved-plans-title">My study plans</h4>
+      <p>Pick up where you left off. Progress updates as you complete scheduled learning steps.</p>
+    </div>
+    <button className="button button-outline button-small saved-plans-refresh" onClick={() => void mutateSavedPlans()} disabled={isSavedPlansLoading}>
+      <RefreshCw size={14} /> {isSavedPlansLoading ? 'Refreshing…' : 'Refresh'}
+    </button>
+  </div>
+  <div className="saved-plans-overview" aria-label="Study plan summary">
+    <div><span>Saved plans</span><strong>{allSavedPlans.length}</strong></div>
+    <div><span>Average completion</span><strong>{allSavedPlans.length ? Math.round(allSavedPlans.reduce((sum, item) => sum + Math.max(0, Math.min(100, Number(item.completionRate) || 0)), 0) / allSavedPlans.length) : 0}%</strong></div>
+    <div><span>Completed</span><strong>{allSavedPlans.filter((item) => Number(item.completionRate) >= 100).length}</strong></div>
+    <div><span>Not scheduled</span><strong>{allSavedPlans.filter((item) => Number(item.scheduledTasks) === 0).length}</strong></div>
+  </div>
+  <div className="saved-plans-toolbar">
+    <label className="saved-plans-search">
+      <span className="sr-only">Search study plans</span>
+      <input type="search" value={planSearch} onChange={(event) => setPlanSearch(event.target.value)} placeholder="Search your plans…" />
+    </label>
+    <label className="saved-plans-select-label">Status
+      <select value={planStatusFilter} onChange={(event) => setPlanStatusFilter(event.target.value as typeof planStatusFilter)}>
+        <option value="all">All plans</option>
+        <option value="in-progress">In progress</option>
+        <option value="completed">Completed</option>
+        <option value="not-scheduled">Not scheduled</option>
+      </select>
+    </label>
+    <label className="saved-plans-select-label">Sort by
+      <select value={planSort} onChange={(event) => setPlanSort(event.target.value as typeof planSort)}>
+        <option value="recent">Recently saved</option>
+        <option value="progress">Most progress</option>
+        <option value="title">Title A–Z</option>
+      </select>
+    </label>
+  </div>
+  {isSavedPlansLoading && !savedPlans ? <p className="saved-plans-state" role="status">Loading your saved study plans…</p> : savedPlansError ? (
+    <div className="saved-plans-state" role="alert"><p>We couldn’t load your saved study plans.</p><button className="button button-outline button-small" onClick={() => void mutateSavedPlans()}>Try again</button></div>
+  ) : filteredSavedPlans.length > 0 ? (
+    <div className="saved-plan-grid">
+      {filteredSavedPlans.map((savedPlan) => {
+        const conceptCount = Array.isArray(savedPlan.plan) ? savedPlan.plan.length : 0
+        const completionRate = Math.max(0, Math.min(100, Number(savedPlan.completionRate) || 0))
+        const scheduledTasks = Math.max(0, Number(savedPlan.scheduledTasks) || 0)
+        const completedTasks = Math.max(0, Number(savedPlan.completedTasks) || 0)
+        const statusLabel = completionRate >= 100 ? 'Completed' : scheduledTasks > 0 ? 'In progress' : 'Not scheduled'
+        return (
+          <article className="saved-plan-card" key={savedPlan.id}>
+            <div className="saved-plan-top">
+              <span className="saved-plan-icon"><FileText size={16} /></span>
+              <time>{savedPlan.createdAt ? new Date(savedPlan.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Saved plan'}</time>
+            </div>
+            <div className="saved-plan-title-row"><h5>{savedPlan.title}</h5><span className={`saved-plan-status ${completionRate >= 100 ? 'is-complete' : scheduledTasks > 0 ? 'is-active' : 'is-idle'}`}>{statusLabel}</span></div>
+            <p className="saved-plan-summary">{savedPlan.summary || 'Your personalized study path.'}</p>
+            <div className="saved-plan-meta">
+              <span><BookOpen size={13} /> {conceptCount} concepts</span>
+              <span><Clock3 size={13} /> {Number(savedPlan.estimatedHours) || 0}h estimated</span>
+            </div>
+            <div className="saved-plan-progress-label"><span>Completion</span><strong>{completionRate}%</strong></div>
+            <div className="saved-plan-progress" role="progressbar" aria-label={`${savedPlan.title} completion`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={completionRate}>
+              <span style={{ width: `${completionRate}%` }} />
+            </div>
+            <p className="saved-plan-progress-detail">{scheduledTasks > 0 ? `${completedTasks} of ${Number(savedPlan.totalTasks) || conceptCount * 3} learning steps completed` : 'Create a schedule to start tracking completion.'}</p>
+            <div className="saved-plan-actions">
+              <button className="button button-outline button-small" onClick={() => {
+                setStudyPlan({ title: savedPlan.title, summary: savedPlan.summary, estimatedHours: savedPlan.estimatedHours, concepts: Array.isArray(savedPlan.plan) ? savedPlan.plan : [] })
+                setPlanId(savedPlan.id)
+                document.getElementById('workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }}>View plan <ArrowUpRight size={14} /></button>
+              <button className="button button-dark button-small" disabled={schedulingPlanId === savedPlan.id} onClick={() => void handleScheduleSavedPlan(savedPlan)}>
+                {schedulingPlanId === savedPlan.id ? 'Scheduling…' : scheduledTasks > 0 ? 'Update schedule' : 'Build schedule'}
+              </button>
+            </div>
+          </article>
+        )
+      })}
+    </div>
+  ) : allSavedPlans.length > 0 ? (
+    <div className="saved-plans-state"><p>No plans match those filters. Try a different search or status.</p><button className="button button-outline button-small" onClick={() => { setPlanSearch(''); setPlanStatusFilter('all'); setPlanSort('recent') }}>Clear filters</button></div>
+  ) : (
+    <div className="saved-plans-state"><p>You haven’t saved a study plan yet. Upload notes or a PDF to create your first one.</p><button className="button button-dark button-small" onClick={() => setShowUpload(true)}><Upload size={14} /> Create a study plan</button></div>
+  )}
+</section>}
+
+<div className="app-columns"><div className="plan-panel"><div className="panel-heading"><span>Today&apos;s plan</span><button className="plain-link">View all</button></div>{todayTasks.map((item) => <div className={`task-row ${item.done ? 'task-done' : ''}`} key={item.key}><span className={`task-icon ${item.color}`} role="button" tabIndex={0} style={{ cursor: live || studyPlan ? 'pointer' : undefined }} onClick={() => toggleTask(item)}>{item.done ? <Check size={14} /> : <Clock3 size={14} />}</span><span className="task-info"><b>{item.title}</b><small>{item.subject}</small></span><span className="task-time">{item.duration}</span><button className="task-more" aria-label={`More options for ${item.title}`}><MoreHorizontal size={16} /></button></div>)}{live && todayTasks.length === 0 && <p style={{ fontSize: 12, margin: '10px 0' }}>No blocks today. <a href="/premium#builder">Build your schedule</a>.</p>}<button className="add-task" onClick={() => router.push(session?.user ? '/premium#builder' : '/login')}><Plus size={15} /> {live ? 'Plan my schedule' : 'Add a task'}</button></div><div className="subjects-panel"><div className="panel-heading"><span>{live && dash?.concepts?.length ? 'Concept progress' : 'Subject progress'}</span><button className="plain-link">Manage</button></div>{subjectRows.map((subject) => <div className="subject-row" key={subject.name}><div className={`subject-icon ${subject.tone}`}>{subject.code.slice(0, 2)}</div><div className="subject-info"><b>{subject.name}</b><small>Next: {subject.next}</small><div className="subject-progress"><i style={{ width: `${subject.progress}%` }} /></div></div><strong>{subject.progress}%</strong></div>)}</div></div></div></div></section>
 
       <section className="section faq-section" id="faq"><div className="faq-heading"><div className="eyebrow"><span className="eyebrow-dot" /> Questions, answered</div><h2>Built for your<br /><em>next chapter.</em></h2><p>Still curious? We&apos;re here to help you get started.</p><a className="text-link" href="mailto:hello@academicfactory.app">Talk to us <ArrowUpRight size={15} /></a></div><div className="faq-list">{['What can I upload to Academic Factory?', 'Is Academic Factory only for CBSE students?', 'How does the AI use my study material?', 'How do I start using Academic Factory?', 'Can I use it on my phone?'].map((question, index) => <div className={`faq-item ${openFaq === index ? 'open' : ''}`} key={question}><button onClick={() => setOpenFaq(openFaq === index ? null : index)}><span>{question}</span><ChevronDown size={18} /></button>{openFaq === index && <p>{index === 0 ? 'Upload syllabi, PDFs, notes, textbook chapters and other study material. Your workspace turns them into useful learning outputs.' : index === 1 ? 'No. It is designed to flex across boards, classes and subjects, starting with a strong experience for senior-school students.' : index === 2 ? 'Your material is used to create structured study outputs such as notes, questions and revision plans. You stay in control of your workspace.' : index === 3 ? 'Create an account, upload your study material, and build your personalized study path from the workspace.' : 'Yes. The responsive workspace is designed for desktop, tablet and mobile.'}</p>}</div>)}</div></section>
 
